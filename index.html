@@ -1,0 +1,2166 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Lector de placas</title>
+<style>
+  :root{
+    --bg:#081a15;          /* fondo del banco de trabajo */
+    --mask:#0f2d25;        /* máscara de soldadura */
+    --mask-edge:#2f6b57;
+    --panel:#0b201a;
+    --panel-2:#10291f;
+    --line:#1f4337;
+    --text:#e4eee7;
+    --muted:#88a396;
+    --copper:#d9b062;
+    --copper-gnd:#5f8f7d;
+    --silk:#e8efe6;
+    --hot:#ff4fa3;         /* net seleccionada */
+    --find:#62e0ff;        /* resultados de búsqueda */
+    --danger:#ff8a7a;
+    --radius:8px;
+    --mono:ui-monospace,"Cascadia Mono","SF Mono",Consolas,"Liberation Mono",monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);overflow:hidden;-webkit-text-size-adjust:100%}
+  button,input,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  :focus-visible{outline:2px solid var(--find);outline-offset:2px}
+  .mono{font-family:var(--mono)}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  [hidden]{display:none!important}
+  body.idle-open #panel{display:none}
+
+  #app{display:flex;flex-direction:column;height:100%;height:100dvh}
+
+  /* ---- barra superior ---- */
+  #bar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;position:relative;z-index:30}
+  .brand{font-weight:650;font-size:15px;letter-spacing:.1px;margin-right:4px;white-space:nowrap}
+  .btn{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius);padding:6px 11px;min-height:34px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;transition:border-color .12s,background .12s}
+  .btn:hover{border-color:#3d7a64}
+  .btn:active{background:#14372a}
+  .btn.primary{background:#d9b062;color:#201705;border-color:#d9b062;font-weight:600}
+  .btn.primary:hover{background:#e6c077;border-color:#e6c077}
+  .btn[aria-pressed="true"]{background:#1a4a38;border-color:#3d9a78}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .seg button{background:var(--panel-2);border:0;padding:6px 12px;min-height:32px}
+  .seg button+button{border-left:1px solid var(--line)}
+  .seg button[aria-pressed="true"]{background:#1a4a38;color:#fff}
+  #fileName{color:var(--muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12.5px}
+  .grow{flex:1}
+  .search{position:relative;flex:1 1 220px;min-width:170px;max-width:380px}
+  .search input{width:100%;background:#061410;border:1px solid var(--line);border-radius:var(--radius);padding:7px 10px;min-height:34px;font-family:var(--mono);font-size:13px}
+  .search input::placeholder{color:#5f7a6d;font-family:var(--sans)}
+  .search input:focus{border-color:var(--find);outline:none}
+  #sugg{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);max-height:min(60vh,340px);overflow:auto;z-index:40;box-shadow:0 12px 30px rgba(0,0,0,.45)}
+  #sugg button{display:flex;width:100%;justify-content:space-between;gap:10px;background:none;border:0;text-align:left;padding:7px 10px;border-bottom:1px solid #153126}
+  #sugg button:last-child{border-bottom:0}
+  #sugg button:hover,#sugg button.on{background:#143a2d}
+  #sugg .k{color:var(--muted);font-size:12px;white-space:nowrap}
+  #sugg .empty{padding:10px;color:var(--muted)}
+
+  /* ---- escenario ---- */
+  #stage{flex:1;min-height:0;display:flex;position:relative}
+  #canvasWrap{flex:1;min-width:0;position:relative;background:var(--bg)}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+  canvas.drag{cursor:grabbing}
+  canvas.pick{cursor:pointer}
+  #tip{position:absolute;pointer-events:none;background:#04100c;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-family:var(--mono);font-size:12px;z-index:5;white-space:nowrap;box-shadow:0 6px 16px rgba(0,0,0,.4)}
+
+  /* ---- panel de detalle ---- */
+  #panel{width:330px;flex:none;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:16px;z-index:20}
+  #panel h2{margin:0;font-size:18px;line-height:1.25;font-family:var(--mono);font-weight:600;word-break:break-all}
+  #panel .sub{color:var(--muted);margin:4px 0 0}
+  #panel .hint{color:var(--muted);margin:0 0 10px}
+  #panel .hint+.hint{margin-top:-2px}
+  #panel .row{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:14px 0 8px}
+  #panel h3{margin:0;font-size:13px;color:var(--muted);font-weight:600}
+  .list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .item{display:flex;gap:10px;align-items:baseline;justify-content:space-between;width:100%;background:var(--panel-2);border:0;border-bottom:1px solid #153126;padding:8px 10px;text-align:left}
+  .item:last-child{border-bottom:0}
+  button.item:hover{background:#17402f}
+  .item .a{font-family:var(--mono);font-weight:600;word-break:break-all}
+  .item .b{color:var(--muted);font-family:var(--mono);font-size:12.5px;text-align:right;word-break:break-word}
+  .item .b.net{color:var(--copper)}
+  .more{padding:8px 10px;color:var(--muted);background:var(--panel-2)}
+  .chip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 9px;font-size:12px;color:var(--muted);margin:0 6px 6px 0}
+  .linkbtn{background:none;border:0;color:var(--find);padding:2px 0;text-decoration:underline;text-underline-offset:3px}
+
+  /* ---- barra de estado ---- */
+  #status{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:5px 12px;background:var(--panel);border-top:1px solid var(--line);color:var(--muted);font-size:12.5px;font-family:var(--mono);min-height:30px}
+  #status .fmt{color:var(--copper);font-weight:600;margin-right:10px}
+
+  /* ---- tarjeta inicial / diálogo ---- */
+  #idle{position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-start;padding:clamp(16px,6vw,80px);background:linear-gradient(90deg,rgba(8,26,21,.96) 0,rgba(8,26,21,.9) 50%,rgba(8,26,21,.4) 100%);z-index:15}
+  #idleCard{width:min(520px,100%);max-height:100%;overflow:auto}
+  #idleCard h1{font-size:clamp(26px,4.4vw,40px);line-height:1.1;margin:0 0 12px;font-weight:700;letter-spacing:-.02em}
+  #idleCard p{margin:0 0 18px;color:#bcd0c4;max-width:46ch}
+  #idleCard .actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+  #idleCard .small{font-size:13px;color:var(--muted);margin:0}
+  #idleError{display:none;margin:0 0 16px;padding:10px 12px;border:1px solid #7a3b34;background:#2a1411;color:#ffd3cc;border-radius:var(--radius);max-width:52ch}
+  #fzBox{display:none;margin:0 0 16px;padding:12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+  #fzBox label{display:block;margin-bottom:6px;font-weight:600}
+  #fzBox textarea{width:100%;height:110px;background:#061410;border:1px solid var(--line);border-radius:6px;padding:8px;font-family:var(--mono);font-size:12px;resize:vertical}
+  #fzBox .help{color:var(--muted);font-size:12.5px;margin:6px 0 10px}
+  body.dragging #stage::after{content:"Suelta el archivo para abrirlo";position:absolute;inset:10px;border:2px dashed var(--copper);border-radius:12px;background:rgba(8,26,21,.82);display:flex;align-items:center;justify-content:center;font-size:20px;z-index:50;pointer-events:none}
+
+  #busy{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(8,26,21,.7);z-index:60;font-size:16px}
+  #toast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);max-width:min(92%,560px);background:#2a1411;border:1px solid #7a3b34;color:#ffd3cc;padding:10px 14px;border-radius:var(--radius);z-index:55;display:none}
+
+  /* ---- móvil ---- */
+  @media (max-width:820px){
+    #bar{gap:6px;padding:6px 8px}
+    .brand{width:100%;order:-2}
+    #fileName{display:none}
+    .search{order:5;flex:1 1 100%;max-width:none}
+    #stage{flex-direction:column}
+    #panel{position:absolute;left:0;right:0;bottom:0;width:auto;max-height:46%;border-left:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:12px 14px;box-shadow:0 -10px 30px rgba(0,0,0,.4);transform:translateY(100%);transition:transform .18s}
+    body.has-sel #panel{transform:none}
+    #idle{align-items:flex-start;background:rgba(8,26,21,.9);padding:20px 16px}
+    #status{font-size:11.5px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="bar">
+    <div class="brand">Lector de placas</div>
+    <button class="btn primary" id="btnOpen" type="button">Abrir archivo</button>
+    <span id="fileName" title=""></span>
+    <div class="seg" role="group" aria-label="Cara de la placa">
+      <button type="button" id="sideTop" aria-pressed="true">Superior</button>
+      <button type="button" id="sideBottom" aria-pressed="false">Inferior</button>
+    </div>
+    <button class="btn" id="btnRotate" type="button" title="Girar 90° (R)">Girar</button>
+    <button class="btn" id="btnMirror" type="button" aria-pressed="false" title="Espejo horizontal (M)">Espejo</button>
+    <button class="btn" id="btnFit" type="button" title="Ajustar a la pantalla (F)">Ajustar</button>
+    <div class="search">
+      <label class="sr" for="q">Buscar componente o net</label>
+      <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Buscar componente o net  ( / )">
+      <div id="sugg" hidden></div>
+    </div>
+    <input id="file" type="file" multiple hidden>
+  </header>
+
+  <main id="stage">
+    <div id="canvasWrap">
+      <canvas id="cv" aria-label="Vista de la placa"></canvas>
+      <div id="tip" hidden></div>
+
+      <div id="idle">
+        <div id="idleCard">
+          <h1>Abre una placa</h1>
+          <p>Arrastra aquí un archivo boardview o elígelo desde tu equipo. Se lee dentro de este navegador: el archivo no se sube a ningún servidor y no necesitas cuenta.</p>
+          <div id="idleError" role="alert"></div>
+          <div id="fzBox">
+            <label for="fzKey">Clave del archivo .fz</label>
+            <textarea id="fzKey" spellcheck="false" placeholder="0x00000000 0x00000000 …"></textarea>
+            <p class="help">Pega las 44 palabras hexadecimales (0x…). Se guarda solo en este navegador.</p>
+            <button class="btn primary" id="fzUse" type="button">Usar esta clave</button>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="idleOpen" type="button">Elegir archivo</button>
+            <button class="btn" id="idleDemo" type="button">Probar con una placa de ejemplo</button>
+            <button class="btn" id="idleClose" type="button" hidden>Cerrar</button>
+          </div>
+          <p class="small">Formatos: .brd, .brd2, .bdv, .cad, .bvr, .fz y .asc (selecciona juntos format.asc, pins.asc y nails.asc).</p>
+        </div>
+      </div>
+      <div id="busy">Leyendo la placa…</div>
+      <div id="toast" role="alert"></div>
+    </div>
+
+    <aside id="panel" aria-live="polite"></aside>
+  </main>
+
+  <footer id="status"><span id="stLeft"></span><span id="stRight"></span></footer>
+</div>
+
+<script>/*
+ * Parsers de boardview para el navegador.
+ * Port a JavaScript de los lectores de formato de OpenBoardView
+ * (https://github.com/OpenBoardView/OpenBoardView, licencia MIT).
+ *
+ * Todos los parsers devuelven el mismo modelo:
+ * {
+ *   format: 'BRD' | 'BRD2' | 'BDV' | 'ASC' | 'CAD' | 'BVR' | 'FZ',
+ *   outline: [{x, y}],
+ *   parts:   [{name, side: 'top'|'bottom'|'both', th: bool, desc?, bbox?: {x1,y1,x2,y2}}],
+ *   pins:    [{x, y, part: índice en parts o -1, net, side, name?, probe}],
+ *   nails:   [{x, y, net, side, probe}]
+ * }
+ */
+(function (root) {
+  'use strict';
+
+  // ---------------------------------------------------------------- utilidades
+
+  function bytesToLatin1(bytes) {
+    let s = '';
+    const CH = 0x8000;
+    for (let i = 0; i < bytes.length; i += CH) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
+    }
+    return s;
+  }
+
+  function latin1ToBytes(s) {
+    const b = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xff;
+    return b;
+  }
+
+  // Los archivos son bytes; igual que OBV, los leemos como latin1 y luego se muestran como UTF-8 "reparado".
+  function toText(bytes) {
+    let s = bytesToLatin1(bytes);
+    const z = s.indexOf('\0');
+    if (z >= 0) s = s.slice(0, z); // el lector C++ se detiene en el primer NUL
+    return s;
+  }
+
+  function find(bytes, str) {
+    return bytesToLatin1(bytes).indexOf(str) >= 0;
+  }
+
+  /*
+   * Réplica exacta de stringfile() de OBV (stb.h). El comportamiento de sus casos
+   * límite (líneas vacías, saltos CRLF) importa porque los parsers de ASC/BDV/BVR
+   * saltan un número fijo de líneas.
+   */
+  function stringfile(s) {
+    const n = s.length;
+    const lines = [];
+    let lineStart = 0;
+    let open = true;
+    let i = 0;
+    while (i < n) {
+      const c = s.charCodeAt(i);
+      if (c === 10 || c === 13) {
+        lines.push(s.slice(lineStart, i));
+        open = false;
+        i++;
+        if (i < n && (s.charCodeAt(i) === 10 || s.charCodeAt(i) === 13)) i++;
+        if (i < n) {
+          lineStart = i;
+          open = true;
+        }
+      }
+      i++;
+    }
+    if (open && lineStart <= n) lines.push(s.slice(lineStart));
+    return lines;
+  }
+
+  function ltrim(s) {
+    let i = 0;
+    while (i < s.length && s.charCodeAt(i) <= 32) i++;
+    return i ? s.slice(i) : s;
+  }
+
+  const RE_INT = /^[ \t\r\n\f\v]*([+-]?\d+)/;
+  const RE_DBL = /^[ \t\r\n\f\v]*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/;
+
+  /*
+   * Lector de campos con la semántica de strtol / strtod / READ_STR de OBV.
+   * `sep` es el delimitador de cadenas ('' = espacios). FZ usa '!'.
+   */
+  function reader(line, sep) {
+    let p = 0;
+    const r = {
+      get pos() { return p; },
+      skip(n) { p += n; },
+      int() {
+        const m = RE_INT.exec(line.slice(p));
+        if (!m) return 0;
+        p += m[0].length;
+        if (sep === '!' && line[p] === '!') p++;
+        return parseInt(m[1], 10);
+      },
+      dbl() {
+        const m = RE_DBL.exec(line.slice(p));
+        if (!m) return 0;
+        p += m[0].length;
+        if (sep === '!' && line[p] === '!') p++;
+        return parseFloat(m[1]);
+      },
+      str() {
+        while (p < line.length && line.charCodeAt(p) <= 32) p++;
+        const s = p;
+        if (sep === '!') {
+          while (p < line.length && line[p] !== '!') p++;
+        } else {
+          while (p < line.length && line.charCodeAt(p) > 32) p++;
+        }
+        const out = line.slice(s, p);
+        p++;
+        return out;
+      },
+      // READ_STR2 de ASC: la cadena termina en dos espacios seguidos
+      str2() {
+        while (p < line.length && line.charCodeAt(p) <= 32) p++;
+        const s = p;
+        while (p + 1 < line.length && (line.charCodeAt(p) > 32 || line.charCodeAt(p + 1) > 32)) p++;
+        const out = line.slice(s, p);
+        p++;
+        return out;
+      },
+      peek() { return line[p]; },
+    };
+    return r;
+  }
+
+  function sideFromLoc(loc) {
+    return loc === '(T)' ? 'top' : 'bottom';
+  }
+
+  function genOutline(pins) {
+    if (!pins.length) return [];
+    const M = 20;
+    let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+    for (const p of pins) {
+      if (p.x < minx) minx = p.x;
+      if (p.x > maxx) maxx = p.x;
+      if (p.y < miny) miny = p.y;
+      if (p.y > maxy) maxy = p.y;
+    }
+    minx -= M; maxx += M; miny -= M; maxy += M;
+    return [
+      { x: minx, y: miny }, { x: maxx, y: miny }, { x: maxx, y: maxy },
+      { x: minx, y: maxy }, { x: minx, y: miny },
+    ];
+  }
+
+  function nailsToPinNets(pins, nails) {
+    // Variante Lenovo: pines sin net toman el de la uña con el mismo número de probe
+    const map = new Map();
+    for (const n of nails) map.set(n.probe, n.net);
+    for (const p of pins) {
+      if (!p.net && map.has(p.probe)) p.net = map.get(p.probe);
+    }
+  }
+
+  // ------------------------------------------------------------------- .brd
+
+  const BRD_ENC = [0x23, 0xe2, 0x63, 0x28];
+
+  function brdIsEncoded(bytes) {
+    return bytes.length >= 4 && BRD_ENC.every((v, i) => bytes[i] === v);
+  }
+
+  function brdDecode(bytes) {
+    const out = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) {
+      let x = bytes[i];
+      if (!(x === 13 || x === 10 || x === 0)) {
+        const v = ((x >> 6) & 3) | ((x << 2) & 0xff);
+        x = ~v & 0xff;
+      }
+      out[i] = x;
+    }
+    return out;
+  }
+
+  function verifyBRD(bytes) {
+    return brdIsEncoded(bytes) || (find(bytes, 'str_length:') && find(bytes, 'var_data:'));
+  }
+
+  function parseBRD(bytes) {
+    if (brdIsEncoded(bytes)) bytes = brdDecode(bytes);
+    const lines = stringfile(toText(bytes));
+    const parts = [], pins = [], nails = [], outline = [];
+    let block = 0;
+
+    for (let raw of lines) {
+      const line = ltrim(raw).replace(/\s+$/, '');
+      if (!line) continue;
+      if (line === 'str_length:') { block = 1; continue; }
+      if (line === 'var_data:') { block = 2; continue; }
+      if (line === 'Format:' || line === 'format:') { block = 3; continue; }
+      if (line === 'Parts:' || line === 'Pins1:') { block = 4; continue; }
+      if (line === 'Pins:' || line === 'Pins2:') { block = 5; continue; }
+      if (line === 'Nails:') { block = 6; continue; }
+
+      const r = reader(line);
+      switch (block) {
+        case 3:
+          outline.push({ x: r.int(), y: r.int() });
+          break;
+        case 4: {
+          const name = r.str();
+          const t = r.int();
+          let side = 'both';
+          if (t === 1 || (t >= 4 && t < 8)) side = 'top';
+          if (t === 2 || t >= 8) side = 'bottom';
+          parts.push({ name, side, th: !(t & 0xc) });
+          break;
+        }
+        case 5: {
+          const x = r.int(), y = r.int(), probe = r.int(), part = r.int();
+          const net = r.str();
+          pins.push({ x, y, probe, part: part - 1, net, side: 'both' });
+          break;
+        }
+        case 6: {
+          const probe = r.int(), x = r.int(), y = r.int(), s = r.int();
+          const net = r.str();
+          nails.push({ probe, x, y, side: s === 1 ? 'top' : 'bottom', net });
+          break;
+        }
+        default:
+      }
+    }
+    if (!block) throw new Error('No se reconoce la estructura del archivo .brd');
+
+    nailsToPinNets(pins, nails);
+    for (const p of pins) {
+      const part = parts[p.part];
+      p.side = part ? part.side : 'both';
+      if (!part) p.part = -1;
+    }
+    return { format: 'BRD', outline, parts, pins, nails };
+  }
+
+  // ------------------------------------------------------------------ .brd2
+
+  function verifyBRD2(bytes) {
+    return find(bytes, 'BRDOUT:') && find(bytes, 'NETS:');
+  }
+
+  function parseBRD2(bytes) {
+    const lines = stringfile(toText(bytes));
+    const nets = new Map();
+    const parts = [], pins = [], nails = [], outline = [];
+    let max = { x: 0, y: 0 };
+    let block = 0;
+    const SIDE = ['both', 'top', 'bottom'];
+
+    for (const raw of lines) {
+      const line = ltrim(raw);
+      if (!line) continue;
+      const r = reader(line);
+      if (line.startsWith('BRDOUT:')) { block = 1; r.skip(7); r.int(); max = { x: r.int(), y: r.int() }; continue; }
+      if (line.startsWith('NETS:')) { block = 2; continue; }
+      if (line.startsWith('PARTS:')) { block = 3; continue; }
+      if (line.startsWith('PINS:')) { block = 4; continue; }
+      if (line.startsWith('NAILS:')) { block = 5; continue; }
+
+      switch (block) {
+        case 1:
+          outline.push({ x: r.int(), y: r.int() });
+          break;
+        case 2: {
+          const id = r.int();
+          nets.set(id, r.str());
+          break;
+        }
+        case 3: {
+          const name = r.str();
+          const x1 = r.int(), y1 = r.int(), x2 = r.int(), y2 = r.int();
+          const first = r.int();
+          const side = SIDE[r.int()] || 'both';
+          parts.push({ name, side, th: false, bbox: { x1, y1, x2, y2 }, first });
+          break;
+        }
+        case 4: {
+          const x = r.int(), y = r.int(), netid = r.int();
+          const side = SIDE[r.int()] || 'both';
+          pins.push({ x, y, net: nets.has(netid) ? nets.get(netid) : '', side, probe: 1, part: -1 });
+          break;
+        }
+        case 5: {
+          const probe = r.int(), x = r.int();
+          let y = r.int();
+          const netid = r.int();
+          const top = r.int() === 1;
+          if (!top) y = max.y - y;
+          nails.push({ probe, x, y, side: top ? 'top' : 'bottom', net: nets.has(netid) ? nets.get(netid) : 'UNCONNECTED' });
+          break;
+        }
+        default:
+      }
+    }
+    if (!block) throw new Error('No se reconoce la estructura del archivo .brd2');
+
+    // En este formato las partes guardan dónde empiezan sus pines, y todo lo
+    // que no está en cara Top viene con la Y invertida.
+    let cpi = 0;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      let isDIP = true;
+      if (part.side === 'bottom') {
+        part.bbox.y1 = max.y - part.bbox.y1;
+        part.bbox.y2 = max.y - part.bbox.y2;
+      }
+      const pei = i === parts.length - 1 ? pins.length : parts[i + 1].first;
+      while (cpi < pei && cpi < pins.length) {
+        const pin = pins[cpi];
+        pin.part = i;
+        if (pin.side !== 'top') pin.y = max.y - pin.y;
+        if ((pin.side === 'top' && part.side === 'top') || (pin.side === 'bottom' && part.side === 'bottom')) isDIP = false;
+        cpi++;
+      }
+      if (isDIP) { part.th = true; part.side = 'both'; }
+      delete part.first;
+    }
+    return { format: 'BRD2', outline, parts, pins, nails };
+  }
+
+  // ------------------------------------------------------------------- .bdv
+
+  function bdvDecode(bytes) {
+    const buf = new Uint8Array(bytes);
+    let count = 0xa0;
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] === 13 && buf[i + 1] === 10) count++;
+      let x = buf[i];
+      if (!(x === 13 || x === 10 || x === 0)) x = (count - x) & 0xff;
+      if (count > 285) count = 159;
+      buf[i] = x;
+    }
+    return buf;
+  }
+
+  function verifyBDV(bytes) {
+    return find(bytes, 'dd:1.3?,r?-=bb') || (find(bytes, '<<format.asc>>') && find(bytes, '<<pins.asc>>'));
+  }
+
+  // Líneas "Part" y de pines compartidas por BDV y ASC
+  function readPartLine(r) {
+    r.skip(4);
+    const name = r.str();
+    const loc = r.str();
+    return { name, side: sideFromLoc(loc), th: false };
+  }
+
+  function parseBDV(bytes) {
+    // Lo normal es que venga ofuscado; si ya está en claro se lee tal cual.
+    const decoded = bdvDecode(bytes);
+    const src = find(decoded, '<<format.asc>>') || !find(bytes, '<<format.asc>>') ? decoded : bytes;
+    const lines = stringfile(toText(src));
+    const outline = [], parts = [], pins = [], nails = [];
+    let block = 0;
+    let idx = 0;
+    while (idx < lines.length) {
+      const raw = lines[idx++];
+      const line = ltrim(raw);
+      if (!line) continue;
+      if (line === '<<format.asc>>') { block = 1; idx += 8; continue; }
+      if (line === '<<pins.asc>>') { block = 2; idx += 8; continue; }
+      if (line === '<<nails.asc>>') { block = 3; idx += 7; continue; }
+      const r = reader(line);
+      switch (block) {
+        case 1:
+          outline.push({ x: r.dbl() * 1000, y: r.dbl() * 1000 });
+          break;
+        case 2:
+          if (line.startsWith('Part')) {
+            parts.push(readPartLine(r));
+          } else {
+            r.int();
+            const name = r.str();
+            const x = r.dbl() * 1000, y = r.dbl() * 1000;
+            r.int();
+            const net = r.str();
+            const probe = r.int();
+            const part = parts.length - 1;
+            pins.push({ x, y, net, probe, part, name, side: parts[part] ? parts[part].side : 'both' });
+          }
+          break;
+        case 3: {
+          r.skip(1);
+          const probe = r.int();
+          const x = r.dbl() * 1000, y = r.dbl() * 1000;
+          r.int(); r.str();
+          const loc = r.str();
+          r.str();
+          const net = r.str();
+          nails.push({ probe, x, y, side: sideFromLoc(loc), net });
+          break;
+        }
+        default:
+      }
+    }
+    if (!block) throw new Error('No se reconoce la estructura del archivo .bdv');
+    return { format: 'BDV', outline, parts, pins, nails };
+  }
+
+  // ------------------------------------------------------------------- .asc
+  // Tres archivos separados: format.asc, pins.asc y nails.asc
+
+  function parseASC(files) {
+    // files: {format, pins, nails} con Uint8Array
+    const outline = [], parts = [], pins = [], nails = [];
+
+    function run(bytes, skipFirst, handler) {
+      const lines = stringfile(toText(bytes));
+      let idx = 0;
+      let first = true;
+      while (idx < lines.length) {
+        const line = ltrim(lines[idx++]);
+        if (!line) continue;
+        if (first) { first = false; idx += skipFirst; continue; }
+        handler(line);
+      }
+    }
+
+    run(files.format, 7, (line) => {
+      const r = reader(line);
+      outline.push({ x: r.dbl() * 1000, y: r.dbl() * 1000 });
+    });
+    run(files.pins, 7, (line) => {
+      const r = reader(line);
+      if (line.startsWith('Part')) {
+        parts.push(readPartLine(r));
+      } else {
+        r.int();
+        const name = r.str2();
+        const x = r.dbl() * 1000, y = r.dbl() * 1000;
+        r.int();
+        const net = r.str();
+        const probe = r.int();
+        const part = parts.length - 1;
+        pins.push({ x, y, net, probe, part, name, side: parts[part] ? parts[part].side : 'both' });
+      }
+    });
+    if (files.nails) {
+      run(files.nails, 6, (line) => {
+        const r = reader(line);
+        r.skip(1);
+        const probe = r.int();
+        const x = r.dbl() * 1000, y = r.dbl() * 1000;
+        r.int(); r.str();
+        const loc = r.str();
+        r.str();
+        const net = r.str();
+        nails.push({ probe, x, y, side: sideFromLoc(loc), net });
+      });
+    }
+    if (!pins.length) throw new Error('No se encontraron pines en pins.asc');
+    return { format: 'ASC', outline, parts, pins, nails };
+  }
+
+  // ------------------------------------------------------------------- .cad
+
+  function verifyCAD(bytes) {
+    return find(bytes, '###Panel Added') && find(bytes, 'C_PIN');
+  }
+
+  function parseCAD(bytes) {
+    const lines = stringfile(toText(bytes));
+    const parts = [], pins = [], nails = [];
+    const ids = new Map();
+    let nailnet = '';
+    const M = 1000;
+    let any = false;
+
+    const fixNet = (n) => (n.indexOf('/') >= 0 ? n.slice(1) : n);
+
+    for (const raw of lines) {
+      const line = ltrim(raw);
+      if (!line) continue;
+      const r = reader(line);
+      if (line.startsWith('COMP')) {
+        any = true;
+        r.str();
+        const name = r.str();
+        r.str(); r.str(); r.str(); r.str(); r.str();
+        const loc = r.str();
+        parts.push({ name, side: loc === '1' ? 'top' : 'bottom', th: false });
+        ids.set(name, parts.length - 1);
+      } else if (line.startsWith('C_PIN')) {
+        r.str();
+        let partName = r.str();
+        const dash = partName.indexOf('-');
+        const pinName = dash >= 0 ? partName.slice(dash + 1) : '';
+        if (dash >= 0) partName = partName.slice(0, dash);
+        if (!ids.has(partName)) continue;
+        const part = ids.get(partName);
+        const x = r.dbl() * M, y = r.dbl() * M;
+        r.dbl(); r.dbl(); r.dbl(); r.str();
+        const net = fixNet(r.str());
+        pins.push({ x, y, net, part, name: pinName, probe: 0, side: parts[part].side });
+      } else if (line.startsWith('NET ')) {
+        r.str();
+        nailnet = fixNet(r.str());
+      } else if (line.startsWith('N_VIA')) {
+        r.str();
+        const x = r.dbl() * M, y = r.dbl() * M;
+        r.str();
+        const side = r.dbl() === 1 ? 'top' : 'bottom';
+        nails.push({ x, y, side, net: nailnet, probe: 0 });
+      }
+    }
+    if (!any && !pins.length) throw new Error('No se reconoce la estructura del archivo .cad');
+    return { format: 'CAD', outline: genOutline(pins), parts, pins, nails };
+  }
+
+  // ------------------------------------------------------------------- .bvr
+
+  function verifyBVR(bytes) {
+    return find(bytes, 'BVRAW_FORMAT_1');
+  }
+
+  function parseBVR(bytes) {
+    const lines = stringfile(toText(bytes));
+    const outline = [], parts = [], pins = [], nails = [];
+    let block = 0;
+    let prevName = '';
+    let idx = 0;
+    while (idx < lines.length) {
+      const line = ltrim(lines[idx++]);
+      if (!line) continue;
+      if (line === '<<Layout>>') { block = 1; idx += 1; continue; }
+      if (line === '<<Pin>>') { block = 2; idx += 1; continue; }
+      if (line === '<<Nail>>') { block = 3; idx += 1; continue; }
+      const r = reader(line);
+      switch (block) {
+        case 1: {
+          const x = Math.trunc(r.dbl() * 1000);
+          if (r.peek() === ',') r.skip(1);
+          const y = Math.trunc(r.dbl() * 1000);
+          outline.push({ x, y });
+          break;
+        }
+        case 2: {
+          const name = r.str();
+          const side = sideFromLoc(r.str());
+          if (name !== prevName) {
+            parts.push({ name, side, th: false });
+            prevName = name;
+          }
+          r.int();
+          const pname = r.str();
+          const x = Math.trunc(r.dbl() * 1000), y = Math.trunc(r.dbl() * 1000);
+          r.int();
+          const net = r.str();
+          pins.push({ x, y, net, name: pname, probe: 0, part: parts.length - 1, side });
+          break;
+        }
+        case 3: {
+          // nextfield(): avanza hasta el primer tabulador y lo salta
+          const tab = line.indexOf('\t');
+          const rr = reader(tab >= 0 ? line.slice(tab + 1) : line);
+          const x = rr.dbl() * 1000, y = rr.dbl() * 1000;
+          rr.int(); rr.str();
+          const loc = rr.str();
+          rr.str();
+          const net = rr.str();
+          nails.push({ x, y, side: sideFromLoc(loc), net, probe: 0 });
+          break;
+        }
+        default:
+      }
+    }
+    if (!block) throw new Error('No se reconoce la estructura del archivo .bvr');
+    return { format: 'BVR', outline, parts, pins, nails };
+  }
+
+  // -------------------------------------------------------------------- .fz
+  // zlib + (opcionalmente) cifrado RC6 en modo flujo con clave de 44 palabras.
+
+  function rotl32(a, b) {
+    b &= 31;
+    return ((a << b) | (a >>> (32 - b))) >>> 0;
+  }
+
+  const FZ_KEY_PARITY = [0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1,
+    1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1];
+
+  function fzCheckKey(key) {
+    if (!key || key.length !== 44) return false;
+    for (let i = 0; i < 44; i++) {
+      let t = key[i] >>> 0;
+      t = (t ^ (t >>> 16)) >>> 0;
+      t ^= t >>> 8;
+      t ^= t >>> 4;
+      t ^= t >>> 2;
+      t ^= t >>> 1;
+      t = (~t) & 1;
+      if (t !== FZ_KEY_PARITY[i]) return false;
+    }
+    return true;
+  }
+
+  // Convierte el texto pegado por la persona ("0x1234abcd ...") en 44 palabras
+  function fzParseKey(text) {
+    const m = (text || '').match(/(?:0x)?[0-9a-fA-F]{8}/g);
+    if (!m || m.length !== 44) return null;
+    return m.map((h) => parseInt(h.replace(/^0x/i, ''), 16) >>> 0);
+  }
+
+  // `encrypt` solo se usa en las pruebas; la app únicamente descifra.
+  function fzCrypt(bytes, key, encrypt) {
+    const out = new Uint8Array(bytes);
+    const r = 20;
+    let A = 0, B = 0, C = 0, D = 0;
+    const ibuf = new Uint8Array(16);
+    for (let pos = 0; pos < out.length; pos++) {
+      B = (B + key[0]) >>> 0;
+      D = (D + key[1]) >>> 0;
+      for (let i = 1; i < r + 1; i++) {
+        const t = rotl32(Math.imul(B, (2 * B + 1) >>> 0) >>> 0, 5);
+        const u = rotl32(Math.imul(D, (2 * D + 1) >>> 0) >>> 0, 5);
+        A = (rotl32((A ^ t) >>> 0, u) + key[2 * i]) >>> 0;
+        C = (rotl32((C ^ u) >>> 0, t) + key[2 * i + 1]) >>> 0;
+        const tmp = A;
+        A = B; B = C; C = D; D = tmp;
+      }
+      A = (A + key[2 * r + 2]) >>> 0;
+      C = (C + key[2 * r + 3]) >>> 0;
+
+      const inByte = out[pos];
+      const outByte = (inByte ^ (A & 0xff)) & 0xff;
+      out[pos] = outByte;
+      const cipher = encrypt ? outByte : inByte;
+      for (let i = 0; i < 15; i++) ibuf[i] = ibuf[i + 1];
+      ibuf[15] = cipher;
+      A = (ibuf[0] | (ibuf[1] << 8) | (ibuf[2] << 16) | (ibuf[3] << 24)) >>> 0;
+      B = (ibuf[4] | (ibuf[5] << 8) | (ibuf[6] << 16) | (ibuf[7] << 24)) >>> 0;
+      C = (ibuf[8] | (ibuf[9] << 8) | (ibuf[10] << 16) | (ibuf[11] << 24)) >>> 0;
+      D = (ibuf[12] | (ibuf[13] << 8) | (ibuf[14] << 16) | (ibuf[15] << 24)) >>> 0;
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- inflate
+  // Descompresor zlib mínimo. Se detiene al final del flujo e ignora los bytes
+  // sobrantes (los .fz traen basura después del flujo comprimido).
+
+  const LBASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+  const LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+  const DBASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+  const DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+  const CLORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+  function huff(lengths, n) {
+    const count = new Uint16Array(16);
+    const symbol = new Uint16Array(n);
+    for (let i = 0; i < n; i++) count[lengths[i]]++;
+    count[0] = 0;
+    const offs = new Uint16Array(16);
+    for (let l = 1; l < 15; l++) offs[l + 1] = offs[l] + count[l];
+    for (let s = 0; s < n; s++) if (lengths[s]) symbol[offs[lengths[s]]++] = s;
+    return { count, symbol };
+  }
+
+  function inflateRaw(src, pos) {
+    let out = new Uint8Array(Math.max(1024, src.length * 4));
+    let op = 0;
+    let bitbuf = 0, bitcnt = 0;
+
+    function bits(n) {
+      if (n === 0) return 0;
+      while (bitcnt < n) {
+        if (pos >= src.length) throw new Error('Fin inesperado de datos comprimidos');
+        bitbuf |= src[pos++] << bitcnt;
+        bitcnt += 8;
+      }
+      const v = bitbuf & ((1 << n) - 1);
+      bitbuf >>>= n;
+      bitcnt -= n;
+      return v;
+    }
+    function decode(h) {
+      let code = 0, first = 0, index = 0;
+      for (let len = 1; len <= 15; len++) {
+        code |= bits(1);
+        const c = h.count[len];
+        if (code - c < first) return h.symbol[index + (code - first)];
+        index += c;
+        first += c;
+        first <<= 1;
+        code <<= 1;
+      }
+      throw new Error('Código de compresión inválido');
+    }
+    function ensure(extra) {
+      if (op + extra > out.length) {
+        const bigger = new Uint8Array(Math.max(out.length * 2, op + extra));
+        bigger.set(out);
+        out = bigger;
+      }
+    }
+    function codes(lh, dh) {
+      for (;;) {
+        let sym = decode(lh);
+        if (sym < 256) {
+          ensure(1);
+          out[op++] = sym;
+        } else if (sym === 256) {
+          return;
+        } else {
+          sym -= 257;
+          if (sym >= 29) throw new Error('Símbolo de longitud inválido');
+          const len = LBASE[sym] + bits(LEXT[sym]);
+          const ds = decode(dh);
+          if (ds >= 30) throw new Error('Símbolo de distancia inválido');
+          const dist = DBASE[ds] + bits(DEXT[ds]);
+          if (dist > op) throw new Error('Distancia fuera de rango');
+          ensure(len);
+          for (let i = 0; i < len; i++) { out[op] = out[op - dist]; op++; }
+        }
+      }
+    }
+
+    let fixed = null;
+    let last;
+    do {
+      last = bits(1);
+      const type = bits(2);
+      if (type === 0) {
+        bitbuf = 0; bitcnt = 0;
+        if (pos + 4 > src.length) throw new Error('Bloque almacenado truncado');
+        const len = src[pos] | (src[pos + 1] << 8);
+        pos += 4;
+        if (pos + len > src.length) throw new Error('Bloque almacenado truncado');
+        ensure(len);
+        out.set(src.subarray(pos, pos + len), op);
+        op += len;
+        pos += len;
+      } else if (type === 1) {
+        if (!fixed) {
+          const l = new Uint8Array(288);
+          for (let i = 0; i < 144; i++) l[i] = 8;
+          for (let i = 144; i < 256; i++) l[i] = 9;
+          for (let i = 256; i < 280; i++) l[i] = 7;
+          for (let i = 280; i < 288; i++) l[i] = 8;
+          const d = new Uint8Array(30).fill(5);
+          fixed = { lh: huff(l, 288), dh: huff(d, 30) };
+        }
+        codes(fixed.lh, fixed.dh);
+      } else if (type === 2) {
+        const nlen = bits(5) + 257, ndist = bits(5) + 1, ncode = bits(4) + 4;
+        const lengths = new Uint8Array(320);
+        for (let i = 0; i < ncode; i++) lengths[CLORDER[i]] = bits(3);
+        const ch = huff(lengths.subarray(0, 19), 19);
+        const ll = new Uint8Array(320);
+        let idx = 0;
+        while (idx < nlen + ndist) {
+          let sym = decode(ch);
+          if (sym < 16) {
+            ll[idx++] = sym;
+          } else {
+            let prev = 0, rep;
+            if (sym === 16) {
+              if (idx === 0) throw new Error('Repetición inválida');
+              prev = ll[idx - 1];
+              rep = 3 + bits(2);
+            } else if (sym === 17) {
+              rep = 3 + bits(3);
+            } else {
+              rep = 11 + bits(7);
+            }
+            if (idx + rep > nlen + ndist) throw new Error('Demasiadas longitudes');
+            while (rep--) ll[idx++] = prev;
+          }
+        }
+        codes(huff(ll.subarray(0, nlen), nlen), huff(ll.subarray(nlen, nlen + ndist), ndist));
+      } else {
+        throw new Error('Tipo de bloque inválido');
+      }
+    } while (!last);
+    return out.subarray(0, op);
+  }
+
+  function zlibInflate(src, start, end) {
+    const view = src.subarray(0, end === undefined ? src.length : Math.min(end, src.length));
+    if (start + 2 > view.length) throw new Error('Datos comprimidos vacíos');
+    if ((view[start] & 0x0f) !== 8) throw new Error('No es un flujo zlib');
+    return inflateRaw(view, start + 2);
+  }
+
+  function parseFZ(bytes, key) {
+    if (bytes.length < 16) throw new Error('Archivo .fz demasiado pequeño');
+    let buf = bytes;
+    const s1 = buf[4], s2 = buf[5];
+    const plain = s1 === 0x78 && (s2 === 0x9c || s2 === 0xda);
+    if (!plain) {
+      if (!fzCheckKey(key)) {
+        const e = new Error('Este archivo .fz está cifrado y necesita su clave de 44 palabras.');
+        e.code = 'FZ_KEY';
+        throw e;
+      }
+      buf = fzCrypt(buf, key, false);
+    }
+
+    const size = buf.length;
+    const L = (buf[size - 1] * 0x1000000) + (buf[size - 2] << 16) + (buf[size - 3] << 8) + buf[size - 4];
+    if (L > size) {
+      const e = new Error(plain ? 'El archivo .fz está dañado.' : 'La clave no descifra este archivo .fz (revisa que sea la correcta).');
+      e.code = plain ? 'FZ_BAD' : 'FZ_KEY';
+      throw e;
+    }
+    const contentSize = size - L + 4;
+
+    let content;
+    try {
+      content = zlibInflate(buf, 4, 4 + contentSize);
+    } catch (err) {
+      const e = new Error(plain ? 'No se pudo descomprimir el archivo .fz.' : 'La clave no descifra este archivo .fz (revisa que sea la correcta).');
+      e.code = plain ? 'FZ_BAD' : 'FZ_KEY';
+      throw e;
+    }
+    let descr = null;
+    try {
+      descr = zlibInflate(buf, contentSize, contentSize + L);
+    } catch (err) { /* la descripción de partes es opcional */ }
+
+    const text = bytesToLatin1(content).replace(/,/g, '.');
+    const lines = stringfile(text);
+    const parts = [], pins = [], nails = [];
+    const ids = new Map();
+    let block = 0;
+    let mult = 1;
+
+    for (const raw of lines) {
+      const line = ltrim(raw);
+      if (!line) continue;
+      if (line === 'UNIT:millimeters') mult = 25.4;
+      if (line[0] === 'A') {
+        const h = line.slice(2);
+        if (h.startsWith('REFDES')) block = 1;
+        else if (h.startsWith('NET_NAME')) block = 2;
+        else if (h.startsWith('TESTVIA')) block = 3;
+        else block = -1;
+        continue;
+      }
+      if (line[0] !== 'S') continue;
+      const r = reader(line, '!');
+      r.skip(2);
+      if (block === 1) {
+        const name = r.str();
+        r.str(); r.str();
+        const mirror = r.str();
+        r.str();
+        parts.push({ name, side: mirror === 'YES' ? 'bottom' : 'top', th: false });
+        ids.set(name, parts.length - 1);
+      } else if (block === 2) {
+        const net = r.str();
+        const partName = r.str();
+        if (!ids.has(partName)) continue;
+        const part = ids.get(partName);
+        const snum = r.str();
+        const pname = r.str();
+        const x = r.dbl() * mult, y = r.dbl() * mult;
+        const probe = r.int();
+        pins.push({
+          x, y, net, part, probe,
+          name: (snum.length <= 1 && (snum === '' || snum === '0')) ? pname : snum,
+          side: parts[part].side,
+        });
+      } else if (block === 3) {
+        r.skip(2);
+        const net = r.str();
+        r.str(); r.int(); r.str();
+        const x = r.dbl() * mult, y = r.dbl() * mult;
+        const loc = r.str();
+        nails.push({ x, y, net, side: loc === 'T' ? 'top' : 'bottom', probe: 0 });
+      }
+    }
+
+    if (descr) {
+      const dl = stringfile(bytesToLatin1(descr));
+      const byName = new Map(parts.map((p, i) => [p.name, i]));
+      for (let i = 2; i < dl.length; i++) {
+        const line = ltrim(dl[i]);
+        if (!line || line[0] === 's') continue;
+        const f = line.split('\t');
+        const description = (f[1] || '').trim();
+        const locations = (f[3] || '').trim().split(/\s+/);
+        if (!description) continue;
+        for (const loc of locations) {
+          if (byName.has(loc)) parts[byName.get(loc)].desc = description;
+        }
+      }
+    }
+
+    if (!pins.length) throw new Error('El archivo .fz se abrió pero no contiene pines reconocibles.');
+    return { format: 'FZ', outline: genOutline(pins), parts, pins, nails };
+  }
+
+  // ----------------------------------------------------- detección y entrada
+
+  /*
+   * files: [{name, bytes: Uint8Array}] (un archivo, o varios .asc)
+   * opts:  {fzKey: number[44] | null}
+   */
+  function parseBoardFiles(files, opts) {
+    opts = opts || {};
+    if (!files.length) throw new Error('No se recibió ningún archivo.');
+    const ext = (n) => (n.split('.').pop() || '').toLowerCase();
+
+    // ASC: format.asc + pins.asc (+ nails.asc)
+    const asc = {};
+    for (const f of files) {
+      const base = f.name.toLowerCase();
+      if (/(^|[\\/])format\.asc$/.test(base) || /format\.asc$/.test(base)) asc.format = f.bytes;
+      else if (/pins\.asc$/.test(base)) asc.pins = f.bytes;
+      else if (/nails\.asc$/.test(base)) asc.nails = f.bytes;
+    }
+    if (asc.format || asc.pins || asc.nails) {
+      if (!asc.format || !asc.pins) {
+        throw new Error('El formato ASC se compone de varios archivos. Selecciona juntos format.asc, pins.asc y nails.asc.');
+      }
+      return parseASC(asc);
+    }
+    if (files.length > 1) {
+      throw new Error('Selecciona un solo archivo de placa (o los tres .asc juntos).');
+    }
+
+    const { name, bytes } = files[0];
+    const e = ext(name);
+    if (bytes.length < 5) throw new Error('El archivo está vacío o es demasiado pequeño.');
+
+    if (e === 'fz') return parseFZ(bytes, opts.fzKey);
+    if (e === 'bvr' && find(bytes, 'BVRAW_FORMAT_3')) {
+      throw new Error('Este .bvr es la versión BVRAW_FORMAT_3, que todavía no está soportada en la web.');
+    }
+    if (verifyBRD2(bytes)) return parseBRD2(bytes);
+    if (verifyBRD(bytes)) return parseBRD(bytes);
+    if (verifyBDV(bytes)) return parseBDV(bytes);
+    if (verifyCAD(bytes)) return parseCAD(bytes);
+    if (verifyBVR(bytes)) return parseBVR(bytes);
+    if (bytes[4] === 0x78 && (bytes[5] === 0x9c || bytes[5] === 0xda)) return parseFZ(bytes, opts.fzKey);
+
+    if (e === 'asc') {
+      throw new Error('El formato ASC se compone de varios archivos. Selecciona juntos format.asc, pins.asc y nails.asc.');
+    }
+    if (['cst', 'gr', 'f2b', 'cae', 'pcb', 'tvw', 'bv'].indexOf(e) >= 0) {
+      throw new Error('El formato .' + e + ' todavía no está soportado en la web.');
+    }
+    throw new Error('No se reconoce el formato del archivo. Por ahora se leen .brd, .brd2, .bdv, .asc, .cad, .bvr y .fz.');
+  }
+
+  // ------------------------------------------------- modelo listo para dibujar
+
+  /*
+   * Calcula índices y geometría que el visor necesita: pines por parte, cajas,
+   * mapa de nets, límites del tablero y un radio de pin razonable.
+   */
+  function finalizeBoard(model) {
+    const { parts, pins, nails } = model;
+
+    for (const p of parts) p.pins = [];
+    for (let i = 0; i < pins.length; i++) {
+      const pin = pins[i];
+      if (!pin.net) pin.net = '';
+      if (pin.part >= 0 && parts[pin.part]) parts[pin.part].pins.push(i);
+    }
+
+    const netPins = new Map();
+    const netNails = new Map();
+    for (let i = 0; i < pins.length; i++) {
+      const n = pins[i].net;
+      if (!n) continue;
+      if (!netPins.has(n)) netPins.set(n, []);
+      netPins.get(n).push(i);
+    }
+    for (let i = 0; i < nails.length; i++) {
+      const n = nails[i].net;
+      if (!n) continue;
+      if (!netNails.has(n)) netNails.set(n, []);
+      netNails.get(n).push(i);
+    }
+    model.netPins = netPins;
+    model.netNails = netNails;
+
+    // Paso mínimo entre pines de una misma parte → radio global del pad
+    const pitches = [];
+    for (const part of parts) {
+      const ids = part.pins;
+      if (ids.length < 2) continue;
+      const lim = Math.min(ids.length, 80);
+      let best = Infinity;
+      for (let a = 0; a < lim; a++) {
+        const pa = pins[ids[a]];
+        for (let b = a + 1; b < lim; b++) {
+          const pb = pins[ids[b]];
+          const d = Math.hypot(pa.x - pb.x, pa.y - pb.y);
+          if (d > 0 && d < best) best = d;
+        }
+      }
+      if (isFinite(best)) { part.pitch = best; pitches.push(best); }
+    }
+    pitches.sort((a, b) => a - b);
+    const typical = pitches.length ? pitches[Math.floor(pitches.length * 0.3)] : 0;
+
+    // Caja de cada parte a partir de sus pines
+    for (const part of parts) {
+      if (part.bbox) {
+        const b = part.bbox;
+        part.box = { x1: Math.min(b.x1, b.x2), y1: Math.min(b.y1, b.y2), x2: Math.max(b.x1, b.x2), y2: Math.max(b.y1, b.y2) };
+        continue;
+      }
+      if (!part.pins.length) { part.box = null; continue; }
+      let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+      for (const i of part.pins) {
+        const p = pins[i];
+        if (p.x < x1) x1 = p.x;
+        if (p.x > x2) x2 = p.x;
+        if (p.y < y1) y1 = p.y;
+        if (p.y > y2) y2 = p.y;
+      }
+      const pad = (part.pitch || typical || 20) * 0.7;
+      part.box = { x1: x1 - pad, y1: y1 - pad, x2: x2 + pad, y2: y2 + pad };
+    }
+
+    // Límites
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const add = (x, y) => {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    };
+    for (const p of pins) add(p.x, p.y);
+    for (const n of nails) add(n.x, n.y);
+    for (const o of model.outline) add(o.x, o.y);
+    if (!isFinite(minX)) throw new Error('El archivo no contiene geometría que mostrar.');
+    if (maxX === minX) { maxX += 10; minX -= 10; }
+    if (maxY === minY) { maxY += 10; minY -= 10; }
+    model.bounds = { minX, minY, maxX, maxY };
+
+    model.pinRadius = Math.max(1, (typical || Math.min(maxX - minX, maxY - minY) / 200) * 0.32);
+
+    // Cada parte limita su pad a un tercio de su propio paso para que no se solapen
+    model.pinR = new Float32Array(pins.length);
+    for (const part of parts) {
+      part.padR = part.pitch ? Math.min(model.pinRadius, part.pitch * 0.34) : model.pinRadius;
+      for (const i of part.pins) model.pinR[i] = part.padR;
+    }
+    for (let i = 0; i < pins.length; i++) if (!model.pinR[i]) model.pinR[i] = model.pinRadius;
+
+    model.stats = {
+      parts: parts.length,
+      pins: pins.length,
+      nails: nails.length,
+      nets: netPins.size,
+    };
+    return model;
+  }
+
+  const api = {
+    parseBoardFiles, finalizeBoard, parseBRD, parseBRD2, parseBDV, parseASC, parseCAD, parseBVR, parseFZ,
+    fzParseKey, fzCheckKey,
+    _internal: { stringfile, bdvDecode, brdDecode, fzCrypt, zlibInflate, reader, latin1ToBytes, bytesToLatin1, BRD_ENC },
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.BoardParsers = api;
+})(typeof self !== 'undefined' ? self : this);
+</script>
+<script>/*
+ * Genera una placa de ejemplo en formato .brd real (texto con bloques),
+ * para probar el visor sin tener un archivo a mano. Unidades: milésimas de pulgada.
+ */
+(function (root) {
+  'use strict';
+
+  function makeSampleBRD() {
+    let seed = 7;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+
+    const parts = []; // {name, type, pins:[{x,y,net}]}
+    const nails = [];
+    const W = 4200, H = 2800;
+
+    const nets = ['GND', '+3V3', '+5V', 'VBAT', 'SDA', 'SCL', 'CLK_24M', 'USB_DP', 'USB_DM', 'RESET#', 'SPI_MOSI', 'SPI_MISO', 'SPI_CLK', 'SPI_CS#', 'LED_EN', 'ADC_IN0', 'ADC_IN1'];
+
+    function qfp(name, cx, cy, perSide, pitch, type, netFor) {
+      const pins = [];
+      const half = (perSide - 1) * pitch / 2;
+      const off = half + pitch * 1.6;
+      let n = 0;
+      for (let i = 0; i < perSide; i++) pins.push({ x: cx - half + i * pitch, y: cy - off, net: netFor(n++) });
+      for (let i = 0; i < perSide; i++) pins.push({ x: cx + off, y: cy - half + i * pitch, net: netFor(n++) });
+      for (let i = 0; i < perSide; i++) pins.push({ x: cx + half - i * pitch, y: cy + off, net: netFor(n++) });
+      for (let i = 0; i < perSide; i++) pins.push({ x: cx - off, y: cy + half - i * pitch, net: netFor(n++) });
+      parts.push({ name, type, pins });
+    }
+
+    function grid(name, cx, cy, cols, rows, pitch, type, netFor) {
+      const pins = [];
+      let n = 0;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          pins.push({ x: cx + (c - (cols - 1) / 2) * pitch, y: cy + (r - (rows - 1) / 2) * pitch, net: netFor(n++) });
+        }
+      }
+      parts.push({ name, type, pins });
+    }
+
+    function two(name, x, y, vertical, gap, type, a, b) {
+      const dx = vertical ? 0 : gap / 2, dy = vertical ? gap / 2 : 0;
+      parts.push({ name, type, pins: [{ x: x - dx, y: y - dy, net: a }, { x: x + dx, y: y + dy, net: b }] });
+    }
+
+    // Procesador (QFP) en cara superior
+    qfp('U1', 1500, 1400, 16, 26, 5, (n) => {
+      if (n % 9 === 0) return 'GND';
+      if (n % 11 === 0) return '+3V3';
+      return nets[4 + (n % (nets.length - 4))];
+    });
+
+    // Memoria SOIC-8 arriba
+    (function soic() {
+      const pins = [];
+      const nn = ['SPI_CS#', 'SPI_MISO', 'RESET#', 'GND', 'SPI_MOSI', 'SPI_CLK', 'RESET#', '+3V3'];
+      for (let i = 0; i < 4; i++) pins.push({ x: 2650 + i * 50, y: 800, net: nn[i] });
+      for (let i = 0; i < 4; i++) pins.push({ x: 2800 - i * 50, y: 1000, net: nn[4 + i] });
+      parts.push({ name: 'U2', type: 5, pins });
+    })();
+
+    // BGA en cara inferior
+    grid('U3', 2300, 1750, 10, 10, 40, 10, (n) => {
+      if (n % 7 === 0) return 'GND';
+      if (n % 13 === 0) return '+3V3';
+      return nets[4 + (n * 3) % (nets.length - 4)];
+    });
+
+    // Conector con agujeros pasantes (type 1 = DIP arriba)
+    (function conn() {
+      const pins = [];
+      const nn = ['+5V', 'GND', 'USB_DP', 'USB_DM', 'GND', 'SDA', 'SCL', 'VBAT', 'GND', 'LED_EN'];
+      for (let i = 0; i < 10; i++) pins.push({ x: 3750, y: 600 + i * 100, net: nn[i] });
+      parts.push({ name: 'J1', type: 1, pins });
+    })();
+
+    // Cristal
+    two('Y1', 950, 800, false, 140, 5, 'CLK_24M', 'GND');
+
+    // Resistencias y condensadores 0402 repartidos
+    let rc = 1, cc = 1, rb = 100, cb = 100;
+    const slots = [];
+    for (let i = 0; i < 38; i++) {
+      slots.push({
+        x: 450 + (i % 19) * 150 + Math.round(rnd() * 20),
+        y: i < 19 ? 300 : 2450,
+      });
+    }
+    for (let i = 0; i < 28; i++) {
+      slots.push({ x: 600 + (i % 7) * 150, y: 1900 + Math.floor(i / 7) * 120 + Math.round(rnd() * 10) });
+    }
+    slots.forEach((s, i) => {
+      const bottom = i % 4 === 3;
+      const isRes = i % 3 !== 0;
+      const a = nets[Math.floor(rnd() * nets.length)];
+      const b = isRes ? nets[Math.floor(rnd() * nets.length)] : (i % 2 ? 'GND' : '+3V3');
+      const name = isRes ? 'R' + (bottom ? rb++ : rc++) : 'C' + (bottom ? cb++ : cc++);
+      two(name, s.x, s.y, i % 5 === 0, 70, bottom ? 10 : 5, a, b === a ? 'GND' : b);
+    });
+
+    // Puntos de prueba
+    const probes = [
+      ['+3V3', 600, 1300, 1], ['GND', 640, 1300, 1], ['+5V', 680, 1300, 1], ['SDA', 3400, 1500, 1], ['SCL', 3440, 1500, 1],
+      ['VBAT', 3000, 2300, 2], ['GND', 3040, 2300, 2], ['USB_DP', 3500, 800, 1], ['USB_DM', 3500, 840, 1],
+    ];
+    probes.forEach((p, i) => nails.push({ probe: i + 1, x: p[1], y: p[2], side: p[3], net: p[0] }));
+
+    // ----- serialización en formato .brd -----
+    const totalPins = parts.reduce((a, p) => a + p.pins.length, 0);
+    const out = [];
+    out.push('str_length: ');
+    out.push('0 0');
+    out.push('var_data:');
+    out.push([5, parts.length, totalPins, nails.length, 0, 0].join(' '));
+    out.push('Format:');
+    out.push('100 100');
+    out.push(W + ' 100');
+    out.push(W + ' ' + H);
+    out.push('100 ' + H);
+    out.push('100 100');
+    out.push('Parts:');
+    let end = 0;
+    parts.forEach((p) => { end += p.pins.length; out.push(p.name + ' ' + p.type + ' ' + end); });
+    out.push('Pins:');
+    parts.forEach((p, i) => p.pins.forEach((pin) => out.push([Math.round(pin.x), Math.round(pin.y), 1, i + 1, pin.net].join(' '))));
+    out.push('Nails:');
+    nails.forEach((n) => out.push([n.probe, n.x, n.y, n.side, n.net].join(' ')));
+    return out.join('\n') + '\n';
+  }
+
+  const api = { makeSampleBRD };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.BoardSample = api;
+})(typeof self !== 'undefined' ? self : this);
+</script>
+<script>
+(function () {
+  'use strict';
+  const P = window.BoardParsers;
+  const $ = (id) => document.getElementById(id);
+  const cv = $('cv'), ctx = cv.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const col = (n) => css.getPropertyValue(n).trim();
+  const C = {
+    bg: col('--bg'), mask: col('--mask'), maskEdge: col('--mask-edge'), copper: col('--copper'), gnd: col('--copper-gnd'),
+    silk: col('--silk'), hot: col('--hot'), find: col('--find'),
+    dim: 'rgba(217,176,98,.22)', dimNail: 'rgba(160,200,185,.25)', nail: '#a8d8c4',
+    partFill: 'rgba(232,239,230,.035)', partLine: 'rgba(232,239,230,.42)',
+  };
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const GND_RE = /^(?:[ADPS]?GND|VSS|GROUND|GND_)/i;
+
+  let M = null;               // modelo cargado
+  let demo = true;            // tablero de ejemplo mostrado detrás de la tarjeta
+  let W = 0, H = 0, dpr = 1;
+  const V = { s: 1, px: 0, py: 0, rot: 0, mirror: false, view: 'top', m: [1, 0, 0, 1], cx: 0, cy: 0, fitS: 1, maxS: 100 };
+  const S = { net: null, part: -1, pin: -1, nail: -1 };
+  let selPins = null, selNails = null, found = null;  // conjuntos para dibujar
+  let pinMask, nailMask, partMask;                     // 1 = superior, 2 = inferior
+  let pendingFiles = null;
+  let raf = 0, anim = 0;
+
+  // ------------------------------------------------------------ utilidades
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+  const sideName = (s) => (s === 'top' ? 'superior' : s === 'bottom' ? 'inferior' : 'ambas caras');
+  const viewBit = () => (V.view === 'top' ? 1 : 2);
+  function sideMask(side) { return side === 'top' ? 1 : side === 'bottom' ? 2 : 3; }
+  function schedule() { if (!raf) raf = requestAnimationFrame(draw); }
+
+  function updateMatrix() {
+    const m = V.mirror ? -1 : 1;
+    const r = V.rot & 3;
+    V.m = r === 0 ? [m, 0, 0, 1] : r === 1 ? [0, -1, m, 0] : r === 2 ? [-m, 0, 0, -1] : [0, 1, -m, 0];
+  }
+  function w2s(x, y) {
+    const [A, B, Cc, D] = V.m, dx = x - V.cx, dy = y - V.cy;
+    return [(dx * A + dy * B) * V.s + W / 2 + V.px, (dx * Cc + dy * D) * V.s + H / 2 + V.py];
+  }
+  function s2w(sx, sy) {
+    const [A, B, Cc, D] = V.m;
+    const rx = (sx - W / 2 - V.px) / V.s, ry = (sy - H / 2 - V.py) / V.s;
+    return [A * rx + Cc * ry + V.cx, B * rx + D * ry + V.cy];
+  }
+
+  function resize() {
+    const r = cv.parentElement.getBoundingClientRect();
+    dpr = window.devicePixelRatio || 1;
+    W = Math.max(1, Math.round(r.width)); H = Math.max(1, Math.round(r.height));
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    if (M && demo && !idle.hidden) fitAll(true);   // el fondo de la tarjeta inicial siempre se ve entero
+    schedule();
+  }
+  new ResizeObserver(resize).observe(cv.parentElement);
+
+  // ------------------------------------------------------- encuadre y zoom
+  function viewBox(x1, y1, x2, y2) {
+    const [A, B, Cc, D] = V.m;
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const [x, y] of [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]) {
+      const dx = x - V.cx, dy = y - V.cy;
+      const rx = dx * A + dy * B, ry = dx * Cc + dy * D;
+      if (rx < a) a = rx; if (rx > c) c = rx; if (ry < b) b = ry; if (ry > d) d = ry;
+    }
+    return { a, b, c, d };
+  }
+  // En móvil el panel es una hoja que tapa la parte baja: el encuadre usa solo lo visible
+  function bottomInset() {
+    if (!document.body.classList.contains('has-sel') || !window.matchMedia('(max-width:820px)').matches) return 0;
+    return Math.min($('panel').offsetHeight, H * 0.6);
+  }
+  function targetForBox(x1, y1, x2, y2, fill) {
+    const v = viewBox(x1, y1, x2, y2);
+    const inset = bottomInset();
+    const w = Math.max(v.c - v.a, 1e-6), h = Math.max(v.d - v.b, 1e-6);
+    const s = clamp(Math.min(W / w, (H - inset) / h) * (fill || 0.86), V.fitS * 0.3, V.maxS);
+    return { s, px: -((v.a + v.c) / 2) * s, py: -((v.b + v.d) / 2) * s - inset / 2 };
+  }
+  function goTo(t, instant) {
+    cancelAnimationFrame(anim);
+    if (instant || reduceMotion) { V.s = t.s; V.px = t.px; V.py = t.py; schedule(); return; }
+    const from = { s: V.s, px: V.px, py: V.py }, t0 = performance.now(), dur = 240;
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+      // interpolación en escala logarítmica para que el zoom se sienta uniforme
+      const s = Math.exp(Math.log(from.s) + (Math.log(t.s) - Math.log(from.s)) * e);
+      V.s = s; V.px = from.px + (t.px - from.px) * e; V.py = from.py + (t.py - from.py) * e;
+      draw();
+      if (k < 1) anim = requestAnimationFrame(step);
+    };
+    anim = requestAnimationFrame(step);
+  }
+  function fitAll(instant) {
+    const b = M.bounds;
+    const t = targetForBox(b.minX, b.minY, b.maxX, b.maxY, 0.9);
+    V.fitS = t.s;
+    goTo(t, instant);
+  }
+  function zoomAbout(factor, sx, sy) {
+    cancelAnimationFrame(anim);
+    const ns = clamp(V.s * factor, V.fitS * 0.3, V.maxS);
+    const k = ns / V.s;
+    V.px = (sx - W / 2) - (sx - W / 2 - V.px) * k;
+    V.py = (sy - H / 2) - (sy - H / 2 - V.py) * k;
+    V.s = ns;
+    schedule();
+  }
+
+  // ------------------------------------------------------------- dibujo
+  function pinLabel(i) {
+    const pin = M.pins[i];
+    if (pin.name) return String(pin.name);
+    if (pin.part >= 0) return String(M.parts[pin.part].pins.indexOf(i) + 1);
+    return '';
+  }
+
+  function draw() {
+    raf = 0;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, W, H);
+    if (!M) return;
+
+    const [A, B, Cc, D] = V.m, s = V.s, ox = W / 2 + V.px, oy = H / 2 + V.py, cx = V.cx, cy = V.cy;
+    const X = (x, y) => ((x - cx) * A + (y - cy) * B) * s + ox;
+    const Y = (x, y) => ((x - cx) * Cc + (y - cy) * D) * s + oy;
+    const bit = viewBit();
+
+    // contorno de la placa
+    const ol = M.outline;
+    ctx.lineJoin = 'round';
+    if (ol.length >= 3) {
+      ctx.beginPath();
+      ctx.moveTo(X(ol[0].x, ol[0].y), Y(ol[0].x, ol[0].y));
+      for (let i = 1; i < ol.length; i++) ctx.lineTo(X(ol[i].x, ol[i].y), Y(ol[i].x, ol[i].y));
+      ctx.closePath();
+      ctx.fillStyle = C.mask; ctx.fill();
+      ctx.strokeStyle = C.maskEdge; ctx.lineWidth = 1.5; ctx.stroke();
+    } else {
+      const b = M.bounds, x1 = X(b.minX, b.minY), y1 = Y(b.minX, b.minY), x2 = X(b.maxX, b.maxY), y2 = Y(b.maxX, b.maxY);
+      ctx.strokeStyle = C.maskEdge; ctx.lineWidth = 1;
+      ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+    }
+
+    const hasNet = !!selPins;
+    const partSelected = S.part >= 0;
+
+    // cuerpos de componentes
+    const hotParts = new Set();
+    if (hasNet) for (const i of selPins) { const p = M.pins[i].part; if (p >= 0) hotParts.add(p); }
+    const labels = [];
+    for (let i = 0; i < M.parts.length; i++) {
+      if (!(partMask[i] & bit)) continue;
+      const bx = M.parts[i].box;
+      if (!bx) continue;
+      const xa = X(bx.x1, bx.y1), ya = Y(bx.x1, bx.y1), xb = X(bx.x2, bx.y2), yb = Y(bx.x2, bx.y2);
+      const x = Math.min(xa, xb), y = Math.min(ya, yb), w = Math.abs(xb - xa), h = Math.abs(yb - ya);
+      if (x > W || y > H || x + w < 0 || y + h < 0) continue;
+      const isSel = i === S.part, isHot = hotParts.has(i), isFind = found && found.parts.has(i);
+      ctx.fillStyle = C.partFill;
+      ctx.fillRect(x, y, w, h);
+      ctx.lineWidth = isSel || isFind ? 2 : isHot ? 1.5 : 1;
+      ctx.strokeStyle = isSel ? C.hot : isFind ? C.find : isHot ? C.hot : C.partLine;
+      ctx.globalAlpha = isSel || isFind || isHot ? 1 : (hasNet ? 0.5 : 1);
+      ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+      ctx.globalAlpha = 1;
+      if (Math.min(w, h) > 18 && w > 30) labels.push([i, x + w / 2, y + h / 2, w, h]);
+    }
+
+    // pines (cada parte tiene su propio radio de pad)
+    const TAU = Math.PI * 2;
+    const pinR = M.pinR;
+    const pPad = new Path2D(), pGnd = new Path2D(), pDim = new Path2D(), pHot = new Path2D(), pFind = new Path2D();
+    const pins = M.pins;
+    const numbers = [];
+    let numR = 0;
+    for (let i = 0; i < pins.length; i++) {
+      if (!(pinMask[i] & bit)) continue;
+      const p = pins[i];
+      const r = Math.max(1.1, pinR[i] * s);
+      const x = X(p.x, p.y), y = Y(p.x, p.y);
+      if (x < -r - 4 || y < -r - 4 || x > W + r + 4 || y > H + r + 4) continue;
+      let path;
+      const hot = (hasNet && selPins.has(i)) || (partSelected && p.part === S.part);
+      if (hot) path = pHot;
+      else if (hasNet) path = pDim;
+      else path = GND_RE.test(p.net) ? pGnd : pPad;
+      path.moveTo(x + r, y); path.arc(x, y, r, 0, TAU);
+      if (found && found.pins.has(i)) { pFind.moveTo(x + r + 3, y); pFind.arc(x, y, r + 3, 0, TAU); }
+      if (r >= 6.5) { numbers.push(i, x, y, r); if (r > numR) numR = r; }
+    }
+    const r = Math.max(1.1, M.pinRadius * s);   // radio global, para los puntos de prueba
+    ctx.fillStyle = C.dim; ctx.fill(pDim);
+    ctx.fillStyle = C.gnd; ctx.fill(pGnd);
+    ctx.fillStyle = C.copper; ctx.fill(pPad);
+    ctx.fillStyle = C.hot; ctx.fill(pHot);
+    if (hasNet || partSelected) { ctx.strokeStyle = C.hot; ctx.lineWidth = 1.5; const ring = new Path2D(); ring.addPath(pHot); ctx.globalAlpha = 0.35; ctx.stroke(ring); ctx.globalAlpha = 1; }
+    if (found) { ctx.strokeStyle = C.find; ctx.lineWidth = 2; ctx.stroke(pFind); }
+
+    // puntos de prueba
+    const nails = M.nails;
+    const nd = Math.max(2.6, r * 1.15);
+    const nNail = new Path2D(), nHot = new Path2D(), nDim = new Path2D();
+    for (let i = 0; i < nails.length; i++) {
+      if (!(nailMask[i] & bit)) continue;
+      const n = nails[i];
+      const x = X(n.x, n.y), y = Y(n.x, n.y);
+      if (x < -10 || y < -10 || x > W + 10 || y > H + 10) continue;
+      const path = selNails && selNails.has(i) ? nHot : (hasNet ? nDim : nNail);
+      path.moveTo(x, y - nd); path.lineTo(x + nd, y); path.lineTo(x, y + nd); path.lineTo(x - nd, y); path.closePath();
+    }
+    ctx.fillStyle = C.dimNail; ctx.fill(nDim);
+    ctx.strokeStyle = C.nail; ctx.lineWidth = 1.4; ctx.stroke(nNail);
+    ctx.fillStyle = C.hot; ctx.fill(nHot);
+
+    // números de pin dentro de los pads
+    if (numbers.length) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#1c1405';
+      let lastFs = 0;
+      for (let k = 0; k < numbers.length; k += 4) {
+        const t = pinLabel(numbers[k]);
+        if (t.length > 3) continue;
+        const fs = Math.round(clamp(numbers[k + 3] * (t.length > 2 ? 0.8 : 1.05), 7, 13));
+        if (fs !== lastFs) { ctx.font = '600 ' + fs + 'px ui-monospace,Consolas,monospace'; lastFs = fs; }
+        ctx.fillText(t, numbers[k + 1], numbers[k + 2] + 0.5);
+      }
+    }
+
+    // nombres de componentes
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const [i, x, y, w, h] of labels) {
+      const name = M.parts[i].name;
+      const fs = clamp(Math.min(h * 0.3, (w / Math.max(name.length, 2)) * 1.5), 9, 16);
+      if (fs < 9 || (M.parts[i].pins.length > 2 && (M.parts[i].padR || 0) * s >= 6.5)) continue;
+      ctx.font = '600 ' + Math.round(fs) + 'px ui-monospace,Consolas,monospace';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(8,26,21,.85)'; ctx.strokeText(name, x, y);
+      ctx.fillStyle = i === S.part ? C.hot : C.silk; ctx.fillText(name, x, y);
+    }
+  }
+
+  // ---------------------------------------------------------- hit testing
+  function hitPin(sx, sy) {
+    const tol = 10, bit = viewBit();
+    let best = -1, bd = tol * tol;
+    const [A, B, Cc, D] = V.m, ox = W / 2 + V.px, oy = H / 2 + V.py;
+    for (let i = 0; i < M.pins.length; i++) {
+      if (!(pinMask[i] & bit)) continue;
+      const p = M.pins[i];
+      const x = ((p.x - V.cx) * A + (p.y - V.cy) * B) * V.s + ox - sx;
+      if (x > tol || x < -tol) continue;
+      const y = ((p.x - V.cx) * Cc + (p.y - V.cy) * D) * V.s + oy - sy;
+      const d = x * x + y * y;
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+  function hitNail(sx, sy) {
+    const tol = Math.max(8, Math.max(2.6, M.pinRadius * V.s * 1.15) + 4), bit = viewBit();
+    let best = -1, bd = tol * tol;
+    for (let i = 0; i < M.nails.length; i++) {
+      if (!(nailMask[i] & bit)) continue;
+      const [x, y] = w2s(M.nails[i].x, M.nails[i].y);
+      const d = (x - sx) * (x - sx) + (y - sy) * (y - sy);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+  function hitPart(sx, sy) {
+    const [wx, wy] = s2w(sx, sy), bit = viewBit();
+    let best = -1, ba = Infinity;
+    for (let i = 0; i < M.parts.length; i++) {
+      if (!(partMask[i] & bit)) continue;
+      const b = M.parts[i].box;
+      if (!b || wx < b.x1 || wx > b.x2 || wy < b.y1 || wy > b.y2) continue;
+      const a = (b.x2 - b.x1) * (b.y2 - b.y1);
+      if (a < ba) { ba = a; best = i; }
+    }
+    return best;
+  }
+
+  // ------------------------------------------------------------ selección
+  function setView(view, keepMirror) {
+    V.view = view;
+    if (!keepMirror) V.mirror = view === 'bottom';
+    updateMatrix();
+    $('sideTop').setAttribute('aria-pressed', view === 'top');
+    $('sideBottom').setAttribute('aria-pressed', view === 'bottom');
+    $('btnMirror').setAttribute('aria-pressed', V.mirror);
+  }
+  function ensureSide(mask) {
+    // si lo que se quiere ver no está en la cara actual, cambiamos de cara
+    if (!(mask & viewBit())) { setView(mask & 1 ? 'top' : 'bottom'); return true; }
+    return false;
+  }
+
+  function clearSel() {
+    S.net = null; S.part = -1; S.pin = -1; S.nail = -1; selPins = null; selNails = null;
+    document.body.classList.remove('has-sel');
+    renderPanel(); schedule();
+  }
+  function selectNet(name, opts) {
+    opts = opts || {};
+    S.net = name; S.part = -1; S.pin = opts.pin === undefined ? -1 : opts.pin; S.nail = opts.nail === undefined ? -1 : opts.nail;
+    selPins = new Set(M.netPins.get(name) || []);
+    selNails = new Set(M.netNails.get(name) || []);
+    document.body.classList.add('has-sel');
+    renderPanel();
+    if (opts.zoom) zoomToNet(name);
+    schedule();
+  }
+  function selectPart(idx, opts) {
+    opts = opts || {};
+    S.part = idx; S.net = null; S.pin = -1; S.nail = -1; selPins = null; selNails = null;
+    document.body.classList.add('has-sel');
+    renderPanel();
+    if (opts.zoom) {
+      const p = M.parts[idx];
+      ensureSide(partMask[idx]);
+      if (p.box) goTo(targetForBox(p.box.x1, p.box.y1, p.box.x2, p.box.y2, 0.5));
+    }
+    schedule();
+  }
+  function zoomToNet(name) {
+    const ids = M.netPins.get(name) || [], nl = M.netNails.get(name) || [];
+    if (!ids.length && !nl.length) return;
+    let mask = 0;
+    for (const i of ids) mask |= pinMask[i];
+    for (const i of nl) mask |= nailMask[i];
+    ensureSide(mask);
+    const bit = viewBit();
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity, n = 0;
+    const add = (x, y) => { n++; if (x < x1) x1 = x; if (x > x2) x2 = x; if (y < y1) y1 = y; if (y > y2) y2 = y; };
+    for (const i of ids) if (pinMask[i] & bit) add(M.pins[i].x, M.pins[i].y);
+    for (const i of nl) if (nailMask[i] & bit) add(M.nails[i].x, M.nails[i].y);
+    if (!n) return;
+    const bw = M.bounds.maxX - M.bounds.minX, bh = M.bounds.maxY - M.bounds.minY;
+    // si la net recorre media placa no tiene sentido acercarse: solo se resalta
+    if ((x2 - x1) > bw * 0.6 || (y2 - y1) > bh * 0.6) return;
+    const pad = Math.max(M.pinRadius * 6, 10);
+    goTo(targetForBox(x1 - pad, y1 - pad, x2 + pad, y2 + pad, 0.8));
+  }
+
+  // --------------------------------------------------------------- panel
+  function renderPanel() {
+    const p = $('panel');
+    p.textContent = '';
+    if (!M) return;
+
+    if (S.net !== null) {
+      const ids = M.netPins.get(S.net) || [], nl = M.netNails.get(S.net) || [];
+      p.appendChild(el('h2', null, S.net));
+      let sub = ids.length + (ids.length === 1 ? ' pin' : ' pines');
+      if (nl.length) sub += ' y ' + nl.length + (nl.length === 1 ? ' punto de prueba' : ' puntos de prueba');
+      p.appendChild(el('p', 'sub', sub));
+      if (S.pin >= 0) {
+        const pin = M.pins[S.pin];
+        if (pin.part >= 0) p.appendChild(el('p', 'sub', 'Seleccionado: ' + M.parts[pin.part].name + ', pin ' + pinLabel(S.pin)));
+      }
+      // cuántos están en la otra cara
+      let other = 0;
+      for (const i of ids) if (!(pinMask[i] & viewBit())) other++;
+      if (other) {
+        const b = el('button', 'linkbtn', other + (other === 1 ? ' pin está' : ' pines están') + ' en la otra cara. Ver esa cara');
+        b.type = 'button';
+        b.onclick = () => { setView(V.view === 'top' ? 'bottom' : 'top'); schedule(); renderPanel(); };
+        const w = el('p', 'sub'); w.appendChild(b); p.appendChild(w);
+      }
+
+      const groups = new Map();
+      for (const i of ids) {
+        const k = M.pins[i].part;
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(pinLabel(i));
+      }
+      const row = el('div', 'row'); row.appendChild(el('h3', null, 'Componentes en esta net'));
+      p.appendChild(row);
+      const list = el('div', 'list');
+      let shown = 0;
+      for (const [k, labs] of groups) {
+        if (shown >= 150) break;
+        shown++;
+        const b = el('button', 'item'); b.type = 'button';
+        b.appendChild(el('span', 'a', k >= 0 ? M.parts[k].name : 'Sin componente'));
+        b.appendChild(el('span', 'b', 'pin ' + labs.filter(Boolean).slice(0, 8).join(', ') + (labs.length > 8 ? '…' : '')));
+        if (k >= 0) b.onclick = () => selectPart(k, { zoom: true });
+        list.appendChild(b);
+      }
+      if (groups.size > shown) list.appendChild(el('div', 'more', 'Y ' + (groups.size - shown) + ' componentes más'));
+      if (!groups.size) list.appendChild(el('div', 'more', 'Esta net solo tiene puntos de prueba.'));
+      p.appendChild(list);
+      p.appendChild(clearButton());
+      return;
+    }
+
+    if (S.part >= 0) {
+      const part = M.parts[S.part];
+      p.appendChild(el('h2', null, part.name));
+      if (part.desc) p.appendChild(el('p', 'sub', part.desc));
+      const chips = el('div'); chips.style.marginTop = '10px';
+      chips.appendChild(el('span', 'chip', 'Cara ' + sideName(part.th ? 'both' : part.side)));
+      chips.appendChild(el('span', 'chip', part.th ? 'Agujero pasante' : 'Montaje superficial'));
+      chips.appendChild(el('span', 'chip', part.pins.length + (part.pins.length === 1 ? ' pin' : ' pines')));
+      p.appendChild(chips);
+      const row = el('div', 'row'); row.appendChild(el('h3', null, 'Pines y sus nets')); p.appendChild(row);
+      const list = el('div', 'list');
+      const max = 300;
+      part.pins.slice(0, max).forEach((i) => {
+        const pin = M.pins[i];
+        const b = el('button', 'item'); b.type = 'button';
+        b.appendChild(el('span', 'a', pinLabel(i) || '·'));
+        b.appendChild(el('span', 'b net', pin.net || 'sin net'));
+        if (pin.net) b.onclick = () => selectNet(pin.net, { pin: i, zoom: true });
+        list.appendChild(b);
+      });
+      if (part.pins.length > max) list.appendChild(el('div', 'more', 'Y ' + (part.pins.length - max) + ' pines más'));
+      if (!part.pins.length) list.appendChild(el('div', 'more', 'Este componente no tiene pines en el archivo.'));
+      p.appendChild(list);
+      p.appendChild(clearButton());
+      return;
+    }
+
+    if (S.nail >= 0) { /* el panel de net ya cubre las uñas */ }
+
+    // estado vacío
+    p.appendChild(el('h2', null, demo ? 'Placa de ejemplo' : 'Toca un pin'));
+    p.appendChild(el('p', 'sub', demo
+      ? 'Es una placa inventada para probar el visor. Abre tu propio archivo para ver una real.'
+      : 'Al tocar un pin se resalta toda su net. Toca el cuerpo de un componente para ver sus pines.'));
+    const chips = el('div'); chips.style.marginTop = '12px';
+    const st = M.stats;
+    chips.appendChild(el('span', 'chip', st.parts + ' componentes'));
+    chips.appendChild(el('span', 'chip', st.pins + ' pines'));
+    chips.appendChild(el('span', 'chip', st.nets + ' nets'));
+    if (st.nails) chips.appendChild(el('span', 'chip', st.nails + ' puntos de prueba'));
+    p.appendChild(chips);
+    p.appendChild(el('p', 'hint', 'Busca arriba por nombre de componente (U1, C25) o de net (GND, +3V3).'));
+    p.appendChild(el('p', 'hint', 'Atajos: / buscar, espacio cambia de cara, R gira, M espejo, F ajusta, Esc limpia.'));
+  }
+  function clearButton() {
+    const b = el('button', 'btn', 'Quitar selección'); b.type = 'button'; b.style.marginTop = '14px';
+    b.onclick = clearSel; return b;
+  }
+
+  // ------------------------------------------------------------- búsqueda
+  const q = $('q'), sugg = $('sugg');
+  let suggItems = [], suggIdx = -1;
+
+  function runSearch() {
+    const t = q.value.trim().toLowerCase();
+    found = null; suggItems = []; suggIdx = -1;
+    if (!M || !t) { sugg.hidden = true; schedule(); return; }
+    const partIdx = [];
+    for (let i = 0; i < M.parts.length; i++) if (M.parts[i].name.toLowerCase().includes(t)) partIdx.push(i);
+    const netNames = [];
+    for (const n of M.netPins.keys()) if (n.toLowerCase().includes(t)) netNames.push(n);
+    for (const n of M.netNails.keys()) if (!M.netPins.has(n) && n.toLowerCase().includes(t)) netNames.push(n);
+
+    // exactos primero
+    partIdx.sort((a, b) => (M.parts[a].name.toLowerCase() === t ? -1 : 0) - (M.parts[b].name.toLowerCase() === t ? -1 : 0) || M.parts[a].name.length - M.parts[b].name.length);
+    netNames.sort((a, b) => (a.toLowerCase() === t ? -1 : 0) - (b.toLowerCase() === t ? -1 : 0) || a.length - b.length);
+
+    found = { parts: new Set(partIdx), pins: new Set() };
+    let budget = 3000;
+    for (const n of netNames) { for (const i of (M.netPins.get(n) || [])) { if (budget-- <= 0) break; found.pins.add(i); } }
+
+    partIdx.slice(0, 6).forEach((i) => suggItems.push({ kind: 'part', idx: i, label: M.parts[i].name, meta: M.parts[i].pins.length + ' pines' }));
+    netNames.slice(0, 6).forEach((n) => suggItems.push({ kind: 'net', name: n, label: n, meta: ((M.netPins.get(n) || []).length) + ' pines' }));
+
+    sugg.textContent = '';
+    if (!suggItems.length) sugg.appendChild(el('div', 'empty', 'Sin resultados para “' + q.value.trim() + '”'));
+    suggItems.forEach((it, k) => {
+      const b = el('button'); b.type = 'button';
+      b.appendChild(el('span', 'mono', it.label));
+      b.appendChild(el('span', 'k', (it.kind === 'part' ? 'Componente · ' : 'Net · ') + it.meta));
+      b.onmousedown = (e) => e.preventDefault();
+      b.onclick = () => chooseSugg(k);
+      sugg.appendChild(b);
+    });
+    sugg.hidden = false;
+    schedule();
+  }
+  function chooseSugg(k) {
+    const it = suggItems[k];
+    if (!it) return;
+    if (it.kind === 'part') selectPart(it.idx, { zoom: true });
+    else selectNet(it.name, { zoom: true });
+    sugg.hidden = true;
+    found = null;
+    q.blur();
+    schedule();
+  }
+  q.addEventListener('input', runSearch);
+  q.addEventListener('focus', () => { if (q.value.trim()) runSearch(); });
+  q.addEventListener('blur', () => setTimeout(() => { sugg.hidden = true; }, 120));
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!suggItems.length) return;
+      suggIdx = (suggIdx + (e.key === 'ArrowDown' ? 1 : -1) + suggItems.length) % suggItems.length;
+      [...sugg.querySelectorAll('button')].forEach((b, i) => b.classList.toggle('on', i === suggIdx));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      chooseSugg(suggIdx >= 0 ? suggIdx : 0);
+    } else if (e.key === 'Escape') {
+      q.value = ''; found = null; sugg.hidden = true; q.blur(); schedule();
+    }
+  });
+
+  // ------------------------------------------------------ carga del modelo
+  function loadModel(model, label, isDemo) {
+    M = model; demo = !!isDemo;
+    pinMask = new Uint8Array(M.pins.length);
+    for (let i = 0; i < M.pins.length; i++) {
+      const p = M.pins[i], part = p.part >= 0 ? M.parts[p.part] : null;
+      pinMask[i] = part && part.th ? 3 : sideMask(p.side);
+    }
+    nailMask = new Uint8Array(M.nails.length);
+    for (let i = 0; i < M.nails.length; i++) nailMask[i] = sideMask(M.nails[i].side);
+    partMask = new Uint8Array(M.parts.length);
+    for (let i = 0; i < M.parts.length; i++) partMask[i] = M.parts[i].th ? 3 : sideMask(M.parts[i].side);
+
+    const b = M.bounds;
+    V.cx = (b.minX + b.maxX) / 2; V.cy = (b.minY + b.maxY) / 2;
+    V.rot = 0;
+    V.maxS = 70 / Math.max(M.pinRadius, 1e-6);
+    let top = 0, bot = 0;
+    for (let i = 0; i < pinMask.length; i++) { if (pinMask[i] & 1) top++; if (pinMask[i] & 2) bot++; }
+    V.mirror = false;
+    setView(bot > top * 1.2 ? 'bottom' : 'top');
+    S.net = null; S.part = -1; S.pin = -1; S.nail = -1; selPins = null; selNails = null; found = null;
+    q.value = ''; sugg.hidden = true;
+    document.body.classList.remove('has-sel');
+    updateMatrix();
+    resize();
+    fitAll(true);
+    $('fileName').textContent = label || '';
+    $('fileName').title = label || '';
+    $('stLeft').textContent = '';
+    const fmt = el('span', 'fmt', M.format);
+    $('stLeft').appendChild(fmt);
+    $('stLeft').appendChild(document.createTextNode(M.stats.parts + ' componentes, ' + M.stats.pins + ' pines, ' + M.stats.nets + ' nets'));
+    renderPanel();
+    schedule();
+  }
+
+  // ------------------------------------------------------ abrir archivos
+  const idle = $('idle'), idleError = $('idleError'), fzBox = $('fzBox');
+  function showIdle(opts) {
+    opts = opts || {};
+    idle.hidden = false;
+    document.body.classList.add('idle-open');
+    $('idleClose').hidden = !(M && !demo);
+    idleError.style.display = opts.error ? 'block' : 'none';
+    idleError.textContent = opts.error || '';
+    fzBox.style.display = opts.fz ? 'block' : 'none';
+    if (opts.fz) $('fzKey').focus();
+  }
+  function hideIdle() { idle.hidden = true; document.body.classList.remove('idle-open'); }
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+    clearTimeout(toast.t); toast.t = setTimeout(() => { t.style.display = 'none'; }, 7000);
+  }
+  function getKey() {
+    try { return P.fzParseKey(localStorage.getItem('fzkey') || ''); } catch (e) { return null; }
+  }
+
+  async function openFiles(list) {
+    const arr = Array.from(list || []);
+    if (!arr.length) return;
+    for (const f of arr) if (f.size > 200 * 1024 * 1024) { reportError(new Error('El archivo ' + f.name + ' es demasiado grande para abrirlo aquí.')); return; }
+    $('busy').style.display = 'flex';
+    try {
+      const files = [];
+      for (const f of arr) files.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
+      pendingFiles = files;
+      await new Promise((r) => setTimeout(r, 30));
+      tryParse(files);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      $('busy').style.display = 'none';
+    }
+  }
+  function tryParse(files) {
+    try {
+      const model = P.finalizeBoard(P.parseBoardFiles(files, { fzKey: getKey() }));
+      const label = files.length > 1 ? files.map((f) => f.name).join(' + ') : files[0].name;
+      loadModel(model, label, false);
+      hideIdle();
+      pendingFiles = null;
+    } catch (e) {
+      reportError(e);
+    }
+  }
+  function reportError(e) {
+    const msg = (e && e.message) || 'No se pudo abrir el archivo.';
+    if (e && e.code === 'FZ_KEY') { showIdle({ error: msg, fz: true }); return; }
+    if (idle.hidden) toast(msg); else showIdle({ error: msg });
+  }
+
+  $('fzUse').addEventListener('click', () => {
+    const key = P.fzParseKey($('fzKey').value);
+    if (!key) { showIdle({ error: 'La clave debe tener exactamente 44 palabras hexadecimales (0x…).', fz: true }); return; }
+    if (!P.fzCheckKey(key)) { showIdle({ error: 'Esa clave no pasa la verificación de paridad; revisa que esté completa y sin errores.', fz: true }); return; }
+    try { localStorage.setItem('fzkey', $('fzKey').value); } catch (e) { /* sin almacenamiento: se usa solo esta vez */ }
+    if (pendingFiles) tryParse(pendingFiles);
+  });
+
+  $('btnOpen').addEventListener('click', () => $('file').click());
+  $('idleOpen').addEventListener('click', () => $('file').click());
+  $('idleClose').addEventListener('click', hideIdle);
+  $('file').addEventListener('change', (e) => { openFiles(e.target.files); e.target.value = ''; });
+  $('idleDemo').addEventListener('click', () => {
+    const m = P.finalizeBoard(P.parseBoardFiles([{ name: 'ejemplo.brd', bytes: P._internal.latin1ToBytes(window.BoardSample.makeSampleBRD()) }]));
+    loadModel(m, 'ejemplo.brd', true);
+    hideIdle();
+  });
+
+  let dragDepth = 0;
+  window.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+  window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.body.classList.remove('dragging'); });
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => {
+    e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+    if (e.dataTransfer && e.dataTransfer.files.length) openFiles(e.dataTransfer.files);
+  });
+
+  // ----------------------------------------------------------- controles
+  $('sideTop').addEventListener('click', () => { setView('top'); schedule(); renderPanel(); });
+  $('sideBottom').addEventListener('click', () => { setView('bottom'); schedule(); renderPanel(); });
+  $('btnMirror').addEventListener('click', toggleMirror);
+  $('btnRotate').addEventListener('click', rotate);
+  $('btnFit').addEventListener('click', () => { if (M) fitAll(); });
+
+  function toggleMirror() {
+    if (!M) return;
+    const c = s2w(W / 2, H / 2);
+    V.mirror = !V.mirror; updateMatrix();
+    $('btnMirror').setAttribute('aria-pressed', V.mirror);
+    recenter(c);
+  }
+  function rotate() {
+    if (!M) return;
+    const c = s2w(W / 2, H / 2);
+    V.rot = (V.rot + 1) & 3; updateMatrix();
+    recenter(c);
+  }
+  // mantiene el mismo punto de la placa en el centro de la pantalla tras girar o reflejar
+  function recenter(world) {
+    const [A, B, Cc, D] = V.m, dx = world[0] - V.cx, dy = world[1] - V.cy;
+    V.px = -(dx * A + dy * B) * V.s; V.py = -(dx * Cc + dy * D) * V.s;
+    schedule();
+  }
+
+  window.addEventListener('keydown', (e) => {
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === '/') { e.preventDefault(); q.focus(); q.select(); }
+    else if (!M) return;
+    else if (k === 'escape') { clearSel(); found = null; q.value = ''; schedule(); }
+    else if (k === 'f') fitAll();
+    else if (k === 'r') rotate();
+    else if (k === 'm') toggleMirror();
+    else if (k === ' ') { e.preventDefault(); setView(V.view === 'top' ? 'bottom' : 'top'); schedule(); renderPanel(); }
+    else if (k === '+' || k === '=') zoomAbout(1.4, W / 2, H / 2);
+    else if (k === '-') zoomAbout(1 / 1.4, W / 2, H / 2);
+  });
+
+  // ---------------------------------------------------- ratón y táctil
+  const ptrs = new Map();
+  let g = null;
+  const tip = $('tip');
+  const rel = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+
+  cv.addEventListener('pointerdown', (e) => {
+    if (!M || !idle.hidden) return;
+    cv.setPointerCapture(e.pointerId);
+    ptrs.set(e.pointerId, rel(e));
+    cancelAnimationFrame(anim);
+    if (ptrs.size === 1) {
+      g = { type: 'pan', start: rel(e), px0: V.px, py0: V.py, t: performance.now(), moved: false };
+    } else if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      g = { type: 'pinch', d0: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, s0: V.s, mid0: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], px0: V.px, py0: V.py, moved: true };
+    }
+    tip.hidden = true;
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!M) return;
+    const pt = rel(e);
+    if (ptrs.has(e.pointerId)) ptrs.set(e.pointerId, pt);
+    if (g && g.type === 'pan' && ptrs.size === 1) {
+      const dx = pt[0] - g.start[0], dy = pt[1] - g.start[1];
+      if (!g.moved && Math.hypot(dx, dy) > 5) { g.moved = true; cv.classList.add('drag'); }
+      if (g.moved) { V.px = g.px0 + dx; V.py = g.py0 + dy; schedule(); }
+    } else if (g && g.type === 'pinch' && ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]) || 1;
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const ns = clamp(g.s0 * d / g.d0, V.fitS * 0.3, V.maxS), k = ns / g.s0;
+      V.s = ns;
+      V.px = (mid[0] - W / 2) - (g.mid0[0] - W / 2 - g.px0) * k;
+      V.py = (mid[1] - H / 2) - (g.mid0[1] - H / 2 - g.py0) * k;
+      schedule();
+    }
+    if (!ptrs.size || e.pointerType === 'mouse') {
+      const [wx, wy] = s2w(pt[0], pt[1]);
+      $('stRight').textContent = 'x ' + Math.round(wx) + '  y ' + Math.round(wy);
+      if (e.pointerType === 'mouse' && !(g && g.moved) && idle.hidden) hover(pt);
+    }
+  });
+  function hover(pt) {
+    const i = hitPin(pt[0], pt[1]);
+    if (i >= 0) {
+      const p = M.pins[i];
+      tip.textContent = (p.part >= 0 ? M.parts[p.part].name + ' pin ' + pinLabel(i) + '  ' : '') + (p.net || 'sin net');
+      tip.hidden = false;
+      tip.style.left = Math.min(pt[0] + 14, W - tip.offsetWidth - 6) + 'px';
+      tip.style.top = Math.min(pt[1] + 16, H - 30) + 'px';
+      cv.classList.add('pick');
+    } else { tip.hidden = true; cv.classList.remove('pick'); }
+  }
+  function endPointer(e) {
+    if (!ptrs.has(e.pointerId)) return;
+    const pt = rel(e);
+    ptrs.delete(e.pointerId);
+    if (g && g.type === 'pan' && !g.moved && performance.now() - g.t < 600) tap(pt);
+    cv.classList.remove('drag');
+    if (ptrs.size === 1 && g && g.type === 'pinch') {
+      const [only] = [...ptrs.values()];
+      g = { type: 'pan', start: only, px0: V.px, py0: V.py, t: 0, moved: true };
+    } else if (!ptrs.size) g = null;
+  }
+  cv.addEventListener('pointerup', endPointer);
+  cv.addEventListener('pointercancel', endPointer);
+  cv.addEventListener('pointerleave', () => { tip.hidden = true; });
+  cv.addEventListener('wheel', (e) => {
+    if (!M || !idle.hidden) return;
+    e.preventDefault();
+    const [sx, sy] = rel(e);
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    zoomAbout(Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0016)), sx, sy);
+  }, { passive: false });
+  cv.addEventListener('dblclick', (e) => { if (M && idle.hidden) { const [sx, sy] = rel(e); zoomAbout(2, sx, sy); } });
+
+  function tap(pt) {
+    const i = hitPin(pt[0], pt[1]);
+    if (i >= 0) {
+      const p = M.pins[i];
+      if (p.net) selectNet(p.net, { pin: i });
+      else if (p.part >= 0) selectPart(p.part);
+      return;
+    }
+    const n = hitNail(pt[0], pt[1]);
+    if (n >= 0) { selectNet(M.nails[n].net, { nail: n }); return; }
+    const part = hitPart(pt[0], pt[1]);
+    if (part >= 0) { selectPart(part); return; }
+    clearSel();
+  }
+
+  // ------------------------------------------------------------- arranque
+  const sample = P.finalizeBoard(P.parseBoardFiles([{ name: 'ejemplo.brd', bytes: P._internal.latin1ToBytes(window.BoardSample.makeSampleBRD()) }]));
+  loadModel(sample, '', true);
+  showIdle();
+  window.__viewer = { V, S, get M() { return M; }, loadModel, selectNet, selectPart, setView, fitAll, openFilesFromBytes: (files) => tryParse(files) };
+})();
+</script>
+</body>
+</html>
